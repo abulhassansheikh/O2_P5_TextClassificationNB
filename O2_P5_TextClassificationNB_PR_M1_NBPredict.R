@@ -1,4 +1,6 @@
 ###Predict the part type of a set of product disctriptions using the mainsheet data
+#VERSION V2.1_NBPredict.R
+#Include manditory evaluation to determine the confidence
 #######################################
 NBPredict = function(PredictionDF, source, TestSkus){
 
@@ -53,6 +55,10 @@ PredictionDF_raw = merge(PredictionDF_raw, string_wrdMat_raw, by= "Pro_String", 
 TrainingSet = subset(PredictionDF_train, PredictionDF_train$STATUS==0)
 TrainingSet = TrainingSet[,!names(TrainingSet) %in% c("Numb_Sku", "STATUS", "Pro_String")]
 
+#Create evaluation set
+EvaluationSet = subset(PredictionDF_train, PredictionDF_train$STATUS==0)
+EvaluationSet = EvaluationSet[,!names(EvaluationSet) %in% c("STATUS", "Pro_String")]
+
 #Set up Test set
 TestSkus = data.frame(Numb_Sku = TestSkus)
 TestSet_Raw = subset(PredictionDF_train, PredictionDF_raw$STATUS==1)
@@ -63,12 +69,65 @@ TestSet = merge(TestSkus, TestSet_Raw, by = "Numb_Sku")
 message("\n")
 message("\nMachine Learning...")
 TrainingSetModel = NBModel(LWMatrix=TrainingSet )
+
+#Create output file
+OutputFile_Eval = data.frame(Numb_Sku= "DUMB", ActualLabel= "DUMB", PredictedLabel= "DUMB", Difference= 0.4, Pro_String= "DUMB",  stringsAsFactors = FALSE)
+LabelList = data.frame(Pro_Label = unique(TrainingSetModel$Pro_Label), MatchValue = 0,stringsAsFactors= FALSE)
+
+
+#Perform evaluation of TrainingSetModel 
+message("\nTesting Machine...")
+pb = txtProgressBar(min = 1, max = nrow(EvaluationSet), initial = 0, char = "*", width = 100, style = 3)
+for(i in 1:nrow(EvaluationSet)){
+
+	NumbString = data.frame(t(EvaluationSet[i,3:ncol(EvaluationSet)]), stringsAsFactors =FALSE)
+	WordMatch = data.frame(Words = rownames(subset(NumbString, NumbString[,1] > 0)), stringsAsFactors =FALSE)
+
+
+	NumbString = data.frame(t(EvaluationSet[i,3:ncol(EvaluationSet)]), stringsAsFactors =FALSE)
+	WordMatch  = subset(NumbString, NumbString[,1] > 0)
+	WordMatch$Words = rownames(WordMatch)
+	names(WordMatch) = c("Freq", "Words")
+	sku = as.character(EvaluationSet[i,1])
+	String = as.character(subset(PredictionDF_train, PredictionDF_train$Numb_Sku== EvaluationSet[i,1], select = Pro_String))
+	actL = as.character(EvaluationSet[i,2])
+
+	LabelList$MatchValue = 0
+
+
+	for(j in 1:nrow(WordMatch)){
+		word = WordMatch[j,2]
+		freq = as.numeric(WordMatch[j,1])
+	
+		for(k in 1:nrow(LabelList)){
+			PriorValue = subset(TrainingSetModel, TrainingSetModel$Pro_Label == LabelList[k,1] & TrainingSetModel$Pro_Word == word, select = WeightNormalization )[1,1]
+			LabelList[k,2]= LabelList[k,2] + PriorValue 
+		}
+	}
+
+	MatchOutput = cbind(sku, actL, subset(LabelList, LabelList$MatchValue == min(LabelList$MatchValue)), String )
+	names(MatchOutput ) = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Difference", "Pro_String")
+	OutputFile_Eval = rbind(OutputFile_Eval, MatchOutput )
+
+	setTxtProgressBar(pb,i)
+}
+ 
+OutputFile_Eval = subset(OutputFile_Eval , Numb_Sku!= "DUMB" & ActualLabel != "DUMB" & PredictedLabel != "DUMB")
+OutputFile_Eval$Check[OutputFile_Eval$ActualLabel != OutputFile_Eval$PredictedLabel] <- 0
+OutputFile_Eval$Check[OutputFile_Eval$ActualLabel == OutputFile_Eval$PredictedLabel] <- 1
+CorrectPercent = round((sum(as.numeric(OutputFile_Eval$Check))/nrow(OutputFile_Eval))*100, 2)
+WrongRef = as.numeric(subset(OutputFile_Eval , OutputFile_Eval$Check == 0 & OutputFile_Eval$ActualLabel != "New_Sku", select = Difference)[,1])
+WorMax =0 
+if(length(WrongRef)>0){WorMax = min(as.numeric(WrongRef))}
+message("\n***Machine ", CorrectPercent , "% Accurate.***")
+
+
+##Perform label prediction for the test set
 #Create output file
 OutputFile = data.frame(Numb_Sku= "DUMB", ActualLabel= "DUMB", PredictedLabel= "DUMB", Difference= 0.4, Pro_String= "DUMB",  stringsAsFactors = FALSE)
 LabelList = data.frame(Pro_Label = unique(TrainingSetModel$Pro_Label), MatchValue = 0,stringsAsFactors= FALSE)
 
-
-#Perform label prediction for the test set
+#Predict new skus
 message("\nPredicting New Skus...")
 pb = txtProgressBar(min = 0, max = nrow(TestSet), initial = 0, char = ">", width = 100, style = 3)
 for(i in 1:nrow(TestSet)){
@@ -100,6 +159,8 @@ for(i in 1:nrow(TestSet)){
 	setTxtProgressBar(pb,i)
 }
 OutputFile = subset(OutputFile , Numb_Sku!= "DUMB" & ActualLabel != "DUMB" & PredictedLabel != "DUMB")
+OutputFile$Difference = OutputFile$Difference - WorMax
+
 FinalOutputFile = subset(OutputFile, select = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Pro_String", "Difference"))
 names(FinalOutputFile) = c("Numb_Sku", 
 				   paste("ActualLabel", source, sep= "_"),
