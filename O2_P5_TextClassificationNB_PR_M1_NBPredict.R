@@ -1,17 +1,17 @@
 ###Predict the part type of a set of product disctriptions using the mainsheet data
 #######################################
-NBPredictOld = function(PredictionDF, source, TestSkus){
+NBPredict = function(PredictionDF, source, TestSkus){
 
 ###Subset PredictionDF into test and training set
-PredictionDF= subset(PredictionDF, !is.na(PredictionDF$Pro_String))
-PredictionDF$string = trimws(PredictionDF$Pro_String)
-PredictionDF$label = trimws(PredictionDF$Pro_Label)
-PredictionDF$STATUS[!is.na(PredictionDF$Pro_String) & !is.na(PredictionDF$Pro_Label)] <- 0
-PredictionDF$STATUS[!is.na(PredictionDF$Pro_String) & is.na(PredictionDF$Pro_Label)] <- 1
+PredictionDF_Base= subset(PredictionDF, !is.na(PredictionDF$Pro_String))
+PredictionDF_Base$Pro_String = trimws(PredictionDF_Base$Pro_String)
+PredictionDF_Base$Pro_Label = trimws(PredictionDF_Base$Pro_Label)
+PredictionDF_Base$STATUS[!is.na(PredictionDF_Base$Pro_String) & !is.na(PredictionDF_Base$Pro_Label)] <- 0
+PredictionDF_Base$STATUS[!is.na(PredictionDF_Base$Pro_String) & is.na(PredictionDF_Base$Pro_Label)] <- 1
 
 ###Format the string in PredictionDF
 #Format the string to get rid of numbers and symboles
-Processed_string = FormatStringcolumn(TextCol = PredictionDF$Pro_String, ColName = "Pro_String", WordColName = "Pro_String", noDup1all0 = 1)
+Processed_string = FormatStringcolumn(TextCol = PredictionDF_Base$Pro_String, ColName = "Pro_String", WordColName = "Pro_String", noDup1all0 = 1)
 string_stw = data.frame(Processed_string[1], stringsAsFactors = FALSE)
 
 #Get list of jobber words
@@ -22,89 +22,51 @@ ExtraCol_s = c(Processed_string[4][[1]][-1], "DUMB")
 string_words_Ref = subset(string_words, string_words[,1]!="")
 
 #Build string word matrix and merge with jobber_Ref
-WordMatrix = data.frame(DUMB = matrix(0, 1, nrow = nrow(string_stw)))
+WordMatrix_raw = data.frame(DUMB = matrix(0, 1, nrow = nrow(string_stw)))
 for(i in 1:nrow(string_words_Ref)){
-	WordArray = RowMatch(Word = string_words_Ref[i,1], InputDF=string_stw)
-	WordMatrix = cbind(WordMatrix, WordArray)
+	WordArray = RowMatchCount(Word = string_words_Ref[i,1], InputDF=string_stw) ####
+	WordMatrix_raw = cbind(WordMatrix_raw, WordArray)
 }
+
+###Normilzie String Length
+NumString = length(PredictionDF_Base$Pro_String)
+WordFreq = data.frame(Pro_Words = names(WordMatrix_raw), sum = colSums((WordMatrix_raw )^2, na.rm = FALSE, dims = 1))
+WordFreq$InverseFreq = (NumString/WordFreq$sum)
+WordFreq$SqrFreq = sqrt(NumString/WordFreq$sum)
+WordMatrix =  WordMatrix_raw #No transformation
+for(i in 1:nrow(WordFreq)){WordMatrix[,i] = WordMatrix[,i]*WordFreq[i,3]} #Inverse Frequency doesn't work so well
 
 #combin the word matrix with the string
 string_wrdMat = cbind(string_stw, WordMatrix)
 string_wrdMat= string_wrdMat[,!(names(string_wrdMat) %in% ExtraCol_s)]
+string_wrdMat_raw = cbind(string_stw, WordMatrix_raw)
+string_wrdMat_raw= string_wrdMat_raw[,!(names(string_wrdMat_raw) %in% ExtraCol_s)]
 
 #Join everything with the PredictionDF
-PredictionDF = merge(PredictionDF, string_wrdMat, by= "Pro_String", all=TRUE)
+PredictionDF_train = PredictionDF_Base
+PredictionDF_train = merge(PredictionDF_train, string_wrdMat, by= "Pro_String", all=TRUE)
+PredictionDF_raw = PredictionDF_Base
+PredictionDF_raw = merge(PredictionDF_raw, string_wrdMat_raw, by= "Pro_String", all=TRUE)
 
-###Create NB Model
+###Create Training set
 #Make training, evaluation and test Set
-TrainingSet = subset(PredictionDF, PredictionDF$STATUS==0)
+TrainingSet = subset(PredictionDF_train, PredictionDF_train$STATUS==0)
 TrainingSet = TrainingSet[,!names(TrainingSet) %in% c("Numb_Sku", "STATUS", "Pro_String")]
-EvaluationSet = subset(PredictionDF, PredictionDF$STATUS==0)
-EvaluationSet = EvaluationSet[,!names(EvaluationSet) %in% c("STATUS", "Pro_String")]
+
+#Set up Test set
 TestSkus = data.frame(Numb_Sku = TestSkus)
-TestSet_Raw = subset(PredictionDF, PredictionDF$STATUS==1)
+TestSet_Raw = subset(PredictionDF_train, PredictionDF_raw$STATUS==1)
 TestSet_Raw= TestSet_Raw[,!names(TestSet_Raw) %in% c("label", "STATUS", "Pro_String")]
 TestSet = merge(TestSkus, TestSet_Raw, by = "Numb_Sku")
-
-if(nrow(TestSet)>0){
 
 ###Make Training Set NB Model
 message("\n")
 message("\nMachine Learning...")
 TrainingSetModel = NBModel(LWMatrix=TrainingSet )
-
-
-###Ceate output file and perform PT prediction on taugh and testing skus
 #Create output file
-OutputFile = data.frame(Numb_Sku= "DUMB", ActualLabel= "DUMB", PredictedLabel= "DUMB", Percent= 0.4, Difference= 0.4, Pro_String= "DUMB",  stringsAsFactors = FALSE)
+OutputFile = data.frame(Numb_Sku= "DUMB", ActualLabel= "DUMB", PredictedLabel= "DUMB", Difference= 0.4, Pro_String= "DUMB",  stringsAsFactors = FALSE)
+LabelList = data.frame(Pro_Label = unique(TrainingSetModel$Pro_Label), MatchValue = 0,stringsAsFactors= FALSE)
 
-#Perform evaluation of TrainingSetModel 
-#message("\nTesting Machine...")
-#pb = txtProgressBar(min = 1, max = nrow(EvaluationSet), initial = 0, char = "*", width = 100, style = 3)
-#for(i in 1:nrow(EvaluationSet)){
-
-#	NumbString = data.frame(t(EvaluationSet[i,3:ncol(EvaluationSet)]), stringsAsFactors =FALSE)
-#	WordMatch = data.frame(Words = rownames(subset(NumbString, NumbString[,1] == 1)), stringsAsFactors =FALSE)
-#	sku = as.character(EvaluationSet[i,1])
-#	String = as.character(subset(PredictionDF, PredictionDF$Numb_Sku== EvaluationSet[i,1], select = string))
-#	actL = as.character(EvaluationSet[i,2])
-
-#	EvaluationResult = NB_Prob(ProbDF = TrainingSetModel, WordValueDF = WordMatch )
-#	Count = sum(EvaluationResult$Match)
-
-#	if(Count == 1){
-#		match = subset(EvaluationResult, EvaluationResult$Match ==1, select = c(Labels, PerLgWProb, Difference))
-#		estL = match[1,1]
-#		PercL = round(match[1,2], 3)
-#		DiffL = round(match[1,3], 3)
-
-
-#	} else if(Count == 0){
-#		match= subset(EvaluationResult, EvaluationResult$PerLgWProb== max(EvaluationResult$PerLgWProb), select = c(Labels, PerLgWProb, Difference))
-#		estL = match[1,1]
-#		PercL = round(match[1,2], 3)
-#		DiffL = round(match[1,3], 3)
-
-
-#	} else{ 
-#		matchAll = subset(testResult, testResult$Match ==1, select = c(Labels, PerLgWProb, Difference))
-#		match= subset(matchAll, matchAll$PerLgWProb== max(matchAll$PerLgWProb))
-#		estL = match[1,1]
-#		PercL = round(match[1,2], 3)
-#		DiffL = round(match[1,3], 3)
-
-#	}
-
-#	OutputString = c(sku, actL , estL , PercL , DiffL , String  )
-#	OutputFile = rbind(OutputFile, OutputString)
-#	setTxtProgressBar(pb,i)
-#}
- 
-#OutputFile = subset(OutputFile , Numb_Sku!= "DUMB" & ActualLabel != "DUMB" & PredictedLabel != "DUMB")
-#OutputFile$Check[OutputFile$ActualLabel != OutputFile$PredictedLabel] <- 0
-#OutputFile$Check[OutputFile$ActualLabel == OutputFile$PredictedLabel] <- 1
-#CorrectPercent = round((sum(as.numeric(OutputFile$Check))/nrow(OutputFile))*100, 2)
-#message("\n***Machine ", CorrectPercent , "% Accurate.***")
 
 #Perform label prediction for the test set
 message("\nPredicting New Skus...")
@@ -112,96 +74,45 @@ pb = txtProgressBar(min = 0, max = nrow(TestSet), initial = 0, char = ">", width
 for(i in 1:nrow(TestSet)){
 
 	NumbString = data.frame(t(TestSet[i,]), stringsAsFactors =FALSE)
-	WordMatch = data.frame(Words = rownames(subset(NumbString, NumbString[,1] == 1)), stringsAsFactors =FALSE)
+	WordMatch  = subset(NumbString, NumbString[,1] > 0)
+	WordMatch$Words = rownames(WordMatch)
+	names(WordMatch) = c("Freq", "Words")
 	sku = as.character(TestSet[i,1])
 	String = as.character(subset(PredictionDF, PredictionDF$Numb_Sku== TestSet[i,1], select = Pro_String))
 	actL = "New_Sku"
 
-	testResult = NB_Prob(ProbDF = TrainingSetModel, WordValueDF = WordMatch)
+	LabelList$MatchValue = 0
 
-	Count = sum(testResult$Match)
-
-	if(Count == 1){
-		match = subset(testResult, testResult$Match ==1, select = c(Labels, PerLgWProb, Difference))
-		estL = match[1,1]
-		PercL = round(match[1,2], 3)
-		DiffL = round(match[1,3], 3)
-
-
-	} else if(Count == 0){
-		match= subset(testResult, testResult$PerLgWProb== max(testResult$PerLgWProb), select = c(Labels, PerLgWProb, Difference))
-		estL = match[1,1]
-		PercL = round(match[1,2], 3)
-		DiffL = round(match[1,3], 3)
-
-
-	} else{ 
-		matchAll = subset(testResult, testResult$Match ==1, select = c(Labels, PerLgWProb, Difference))
-		match= subset(matchAll, matchAll$PerLgWProb== max(matchAll$PerLgWProb))
-		estL = match[1,1]
-		PercL = round(match[1,2], 3)
-		DiffL = round(match[1,3], 3)
-
+	for(j in 1:nrow(WordMatch)){
+		word = WordMatch[j,2]
+		freq = as.numeric(WordMatch[j,1])
+	
+		for(k in 1:nrow(LabelList)){
+			PriorValue = subset(TrainingSetModel, TrainingSetModel$Pro_Label == LabelList[k,1] & TrainingSetModel$Pro_Word == word, select = WeightNormalization )[1,1]
+			LabelList[k,2]= LabelList[k,2] + PriorValue 
+		}
 	}
 
-	OutputString = c(sku, actL , estL , PercL , DiffL , String  )
-	OutputFile = rbind(OutputFile, OutputString)
+	MatchOutput = cbind(sku, actL, subset(LabelList, LabelList$MatchValue == min(LabelList$MatchValue)), String )
+	names(MatchOutput ) = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Difference", "Pro_String")
+	OutputFile = rbind(OutputFile, MatchOutput )
 
-setTxtProgressBar(pb,i)
+	setTxtProgressBar(pb,i)
 }
 OutputFile = subset(OutputFile , Numb_Sku!= "DUMB" & ActualLabel != "DUMB" & PredictedLabel != "DUMB")
-#OutputFile$Check[OutputFile$ActualLabel == "New_Sku"] <- 0
-
-#WrongRef = as.numeric(subset(OutputFile , OutputFile$Check == 0 & OutputFile$ActualLabel != "New_Sku", select = Difference)[,1])
-#WorMax = max(as.numeric(WrongRef))
-
-#RightRef = as.numeric(subset(OutputFile , OutputFile$Check == 1 & OutputFile$ActualLabel != "New_Sku", select = Difference)[,1])
-#CorAvg = mean(as.numeric(RightRef))
-
-#NewRef = as.numeric(subset(OutputFile , OutputFile$ActualLabel == "New_Sku", select = Difference)[,1])
-#WorAvg = mean(as.numeric(WrongRef))
-#CorMax = max(as.numeric(RightRef))
-#hist(RightRef , col=rgb(0,1,0,0.5))
-#hist(NewRef , col=rgb(0,1,0.5), add=T)
-#hist(WrongRef , col=rgb(1,0,0,0.5), add=T)
-#abline(h = 0, v = WorMax  , col = "red", lwd = 5)
-#abline(h = 0 , v = WorAvg  , col = "blue", lwd = 5)
-#abline(h = 0, v = CorMax  , col = "green", lwd = 5)
-#abline(h = 0 , v = CorAvg  , col = "purple", lwd = 5)
-
-#OutputFile$EasyConfidence[as.numeric(OutputFile$Difference) <= CorAvg] = "Low"
-#OutputFile$EasyConfidence[as.numeric(OutputFile$Difference) > CorAvg& as.numeric(OutputFile$Difference) <= WorMax] = "Medium"
-#OutputFile$EasyConfidence[as.numeric(OutputFile$Difference) > WorMax] = "High"
-
-FinalOutputFile = subset(OutputFile, select = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Percent", "Pro_String", "Difference"))
+FinalOutputFile = subset(OutputFile, select = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Pro_String", "Difference"))
 names(FinalOutputFile) = c("Numb_Sku", 
 				   paste("ActualLabel", source, sep= "_"),
 				   paste("PredictedLabel", source, sep= "_"),
-				   paste("Percent", source, sep= "_"),
 				   paste("Pro_String", source, sep= "_"),
 				   paste("Difference", source, sep= "_"))
+
 
 message("\nPrediction Complete.\n")
 return(FinalOutputFile )
 
-} else{
-
-OutputFile = data.frame(Numb_Sku= "DUMB", ActualLabel= "DUMB", PredictedLabel= "DUMB", Percent= 0.4, Difference= 0.4, Pro_String= "DUMB",  stringsAsFactors = FALSE)
-FinalOutputFile = subset(OutputFile, select = c("Numb_Sku", "ActualLabel", "PredictedLabel", "Percent", "Pro_String", "Difference"))
-names(FinalOutputFile) = c("Numb_Sku", 
-				   paste("ActualLabel", source, sep= "_"),
-				   paste("PredictedLabel", source, sep= "_"),
-				   paste("Percent", source, sep= "_"),
-				   paste("Pro_String", source, sep= "_"),
-				   paste("Difference", source, sep= "_"))
-
-message("\nNo New Skus to predict\n")
-return(FinalOutputFile )
-}
-
 ###
 #End function
-
 }
 
 

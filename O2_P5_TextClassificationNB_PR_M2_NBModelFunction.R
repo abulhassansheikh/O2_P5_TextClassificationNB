@@ -15,57 +15,55 @@ nWords = length(AllWordText)
 nLabels = length(AllLabelText)
 Total = nrow(LWMatrix)
 
-pbL = txtProgressBar(min = 0, max = length(AllLabelText), initial = 0, char = ">", width = 100, style = 3)
-#pbW = txtProgressBar(min = 2, max = ncol(LWMatrix), initial = 0, char = "*", width = 100, style = 3)
+###Compliment Naive Bayes data
+LabelDF = data.frame(Pro_Label = AllLabelText, stringsAsFactors = FALSE)
+Pro_StringWordn = data.frame(nWord = rowSums(LWMatrix[2:ncol(LWMatrix)], na.rm = FALSE, dims = 1))
+Pro_StringWordn = cbind(Pro_Label = LWMatrix[,1],Pro_StringWordn ) 
+for(i in 1:nrow(LabelDF)){LabelDF$LabelnWord[i] = sum(subset(Pro_StringWordn, as.character(Pro_StringWordn$Pro_Label) == as.character(LabelDF$Pro_Label[i]), select = nWord)[,1])}
+Pro_Wordn = data.frame(nWord = colSums(LWMatrix[2:ncol(LWMatrix)], na.rm = FALSE, dims = 1))
+Pro_Wordn = cbind(Pro_Word= rownames(Pro_Wordn), Pro_Wordn, row.names = NULL)
+
+#Total numb of words occuring in classes other than the selected classRowMatchCount 
+nWordTotal = sum(Pro_StringWordn$nWord)
+LabelDF$LabelnWord_Not = nWordTotal - LabelDF$LabelnWord + 1 
+
+#Total numb of selected word occuring in string in classes other than the selected class
+WordnotLabelDF = data.frame(Pro_Label = "DUMB", Pro_Word = "DUMB", WordLabelContrast = 0, LabelContrast = 0, stringsAsFactors = FALSE)
+
+if(length(AllLabelText)>1){pb = txtProgressBar(min = 1, max = length(AllLabelText), initial = 0, char = "*", width = 100, style = 3)}
 for(L in 1:length(AllLabelText)){
-
-	LabelCol = data.frame(LabelValue = LWMatrix[,1], Label = 0, stringsAsFactors = FALSE)
-	LabelText = AllLabelText[L]
-	LabelCol$Label[LabelCol$LabelValue == LabelText] <- 1 
-	Label = data.frame(Label = LabelCol[,2])
 	
-	#message("---", LabelText, " ", sum(Label))
-
-	#All Label present and Absent Values
-	LabelAbsent= c(as.character(LabelText), "No", "-", "All", log((nrow(Label) - sum(Label)+1)/(nrow(Label)+nLabels) ) )
-	NBmodel= rbind(NBmodel, LabelAbsent)
-	LabelPresent= c(as.character(LabelText), "Yes", "-", "All", log((sum(Label)+1)/(nrow(Label)+nLabels)))
-	NBmodel= rbind(NBmodel, LabelPresent)
-
+	LabelCol = data.frame(LabelValue = LWMatrix[,1], stringsAsFactors = FALSE)
+	LabelText = AllLabelText[L]
+	LabelConstrastValue = subset(LabelDF, LabelText == LabelDF$Pro_Label, select = LabelnWord_Not)[1,1]
+	
 for(W in 2:ncol(LWMatrix)){
 
 	Word = data.frame(Word = LWMatrix[,W])
 	WordText = names(LWMatrix)[W]
-	#message(WordText , " ", sum(Word ))
 
-	Contrastdf = cbind(Label, Word)
+	Contrastdf = cbind(LabelCol, Word)
+	Contrastdf = subset(Contrastdf, LabelText != LabelCol$LabelValue)
+	
+	Output = c(as.character(LabelText), as.character(WordText) ,sum(Contrastdf$Word)+nWords, LabelConstrastValue)
+	WordnotLabelDF = rbind(WordnotLabelDF , Output)
 
-	#Common Values
-	Contrastdf$Common = as.integer((Contrastdf$Label== 1) & (Contrastdf$Word== 1))
-	CommonValue = c(as.character(LabelText), "Yes", as.character(WordText), "Yes", log((sum(Contrastdf$Common)+1)/ (nrow(Contrastdf)+ nWords)) )
-	NBmodel= rbind(NBmodel, CommonValue )
-
-	#Absent Values
-	Contrastdf$Absent = as.integer((Contrastdf$Label== 0) & (Contrastdf$Word== 0))
-	AbsentValue = c(as.character(LabelText), "No", as.character(WordText), "No", log((sum(Contrastdf$Absent)+1)/ (nrow(Contrastdf)+ nWords) ) )
-	NBmodel= rbind(NBmodel, AbsentValue)
-
-	#Label Only Value
-	Contrastdf$LabelOnly =  as.integer((Contrastdf$Label== 1) & (Contrastdf$Common == 0) & (Contrastdf$Absent == 0))
-	LabelOnlyValue = c(as.character(LabelText), "Yes", as.character(WordText), "No", log((sum(Contrastdf$LabelOnly)+1)/(nrow(Contrastdf)+ nWords)) )
-	NBmodel= rbind(NBmodel, LabelOnlyValue)
-
-	Contrastdf$WordOnly =  as.integer((Contrastdf$Word== 1) & (Contrastdf$Common == 0) & (Contrastdf$Absent == 0))
-	WordOnlyValue = c(as.character(LabelText), "No", as.character(WordText), "Yes", log((sum(Contrastdf$WordOnly)+1)/(nrow(Contrastdf)+ nWords)) )
-	NBmodel= rbind(NBmodel, WordOnlyValue)
-
-	#message(L, " ", W, " ", sum(Contrastdf$Common), " ", sum(Contrastdf$Absent ), " ", sum(Contrastdf$LabelOnly), " ", sum(Contrastdf$WordOnly))
-	#setTxtProgressBar(pbW,W)
-
-}	
-	setTxtProgressBar(pbL,L)
 }
-NBmodel = subset(NBmodel, Label != "DUMB" & LabelPresent != "DUMB" & Word != "DUMB" & WordPresent != "DUMB")
+if(length(AllLabelText)>1){setTxtProgressBar(pb,L)}
+}
+
+WordnotLabelDF$prior = as.numeric(WordnotLabelDF$WordLabelContrast)/ as.numeric(WordnotLabelDF$LabelContrast)
+WordnotLabelDF$log_prior = log(WordnotLabelDF$prior)
+WordnotLabelDF$abs_log_prior = abs(WordnotLabelDF$log_prior)
+
+for(i in 1:nrow(LabelDF)){
+	LabelPriorSum = sum(subset(WordnotLabelDF, WordnotLabelDF$Pro_Label == LabelDF$Pro_Label[i], select = abs_log_prior))
+	WordnotLabelDF$priorSum[WordnotLabelDF$Pro_Label == LabelDF$Pro_Label[i]] <- LabelPriorSum
+}
+
+WordnotLabelDF$WeightNormalization = WordnotLabelDF$log_prior/WordnotLabelDF$priorSum
+
+NBmodel = subset(WordnotLabelDF, Pro_Label != "DUMB" & Pro_Word!= "DUMB", select = c(Pro_Label, Pro_Word,WeightNormalization ))
 
 return(NBmodel)
 }
